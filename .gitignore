@@ -1,0 +1,41 @@
+# Environment Files
+.env
+.env.backup
+.env.production
+
+# PHP/Composer
+/vendor/
+composer.phar
+composer.lock
+
+# IDE Files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.phpunit.result.cache
+
+# System Files
+.DS_Store
+Thumbs.db
+*.log
+*.cache
+*.swp
+*.swo
+
+# Application Specific
+/public/hot
+/public/storage
+/storage/*.key
+/.phpunit.cache
+node_modules/
+npm-debug.log
+yarn-error.log
+*.sql
+*.sqlite
+*.sqlite3
+
+# Build Files
+/build/
+/dist/
+/tmp/
