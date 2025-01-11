@@ -214,6 +214,187 @@ class User extends Model
 }
 ```
 
+## Model Generator
+
+The ORM includes a Model Generator tool to automatically create model classes for your database tables.
+
+### Using the Model Generator
+
+1. Create the tools directory in your project root:
+```bash
+mkdir -p tools
+```
+
+2. Create the ModelGenerator file (tools/ModelGenerator.php):
+```php
+<?php
+
+class ModelGenerator
+{
+    private string $modelDirectory;
+    private string $namespace = 'App\\Models';
+
+    public function __construct()
+    {
+        // Get the project root directory
+        $rootDir = dirname(__DIR__);
+        $this->modelDirectory = $rootDir . '/app/Models/';
+
+        // Create Models directory if it doesn't exist
+        if (!is_dir($this->modelDirectory)) {
+            mkdir($this->modelDirectory, 0755, true);
+        }
+    }
+
+    public function generate(string $tableName)
+    {
+        // Remove 'ngb_' prefix and convert to CamelCase
+        $className = $this->getClassName($tableName);
+        
+        $template = <<<PHP
+<?php
+
+namespace {$this->namespace};
+
+use SimpleORM\Model;
+
+class {$className} extends Model
+{
+    protected string \$table = '{$tableName}';
+    
+    protected array \$fillable = [
+        // Add your fillable fields here
+    ];
+    
+    protected array \$guarded = ['id'];
+}
+PHP;
+
+        $filename = $this->modelDirectory . $className . '.php';
+        file_put_contents($filename, $template);
+        
+        echo "Generated model {$className} for table {$tableName}\n";
+    }
+
+    private function getClassName(string $tableName): string
+    {
+        // Remove prefix (e.g., 'ngb_')
+        $name = str_replace('ngb_', '', $tableName);
+        
+        // Convert to singular if possible
+        if (substr($name, -1) === 's') {
+            $name = substr($name, 0, -1);
+        }
+        
+        // Convert snake_case to CamelCase
+        return str_replace('_', '', ucwords($name, '_'));
+    }
+}
+```
+
+3. Create a generator script (tools/generate_models.php):
+```php
+<?php
+
+require_once __DIR__ . '/ModelGenerator.php';
+
+// List your tables
+$tables = [
+    'users',
+    'posts',
+    'comments',
+    // Add all your tables here
+];
+
+// Create generator instance
+$generator = new ModelGenerator();
+
+// Generate models for each table
+foreach ($tables as $table) {
+    $generator->generate($table);
+}
+
+echo "\nAll models have been generated successfully!\n";
+```
+
+### Running the Generator
+
+1. From your project root:
+```bash
+php tools/generate_models.php
+```
+
+### Generated Model Structure
+
+The generator will:
+- Create model classes in app/Models/
+- Remove the 'ngb_' prefix from table names
+- Convert snake_case to CamelCase
+- Set up proper namespacing
+- Include basic model configuration
+
+Example output for table 'ngb_users':
+```php
+<?php
+
+namespace App\Models;
+
+use SimpleORM\Model;
+
+class User extends Model
+{
+    protected string $table = 'ngb_users';
+    
+    protected array $fillable = [
+        // Add your fillable fields here
+    ];
+    
+    protected array $guarded = ['id'];
+}
+```
+
+### Customizing the Generator
+
+You can modify the ModelGenerator class to:
+- Change the namespace
+- Add custom methods
+- Modify the model template
+- Add relationship methods
+- Include additional properties
+
+Example of customizing the template:
+```php
+private function getTemplate($className, $tableName): string
+{
+    return <<<PHP
+<?php
+
+namespace {$this->namespace};
+
+use SimpleORM\Model;
+
+class {$className} extends Model
+{
+    protected string \$table = '{$tableName}';
+    
+    protected array \$fillable = [
+        // Add your fillable fields here
+    ];
+    
+    protected array \$guarded = ['id'];
+    
+    // Add custom methods
+    public function getByStatus(string \$status): array
+    {
+        return self::query()
+            ->where('status', '=', \$status)
+            ->get();
+    }
+}
+PHP;
+}
+```
+
 ## Examples
 
 ### Complete CRUD Example
