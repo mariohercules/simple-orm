@@ -23,11 +23,11 @@ try {
 
 // Return the configuration array
 return [
-    'host' => $_ENV['HTTP_DB_HOST'],
-    'port' => $_ENV['HTTP_DB_PORT'],
-    'name' => $_ENV['HTTP_DB_DATABASE'],
-    'user' => $_ENV['HTTP_DB_USERNAME'],
-    'password' => $_ENV['HTTP_DB_PASSWORD'],
+    'host' => $_ENV['DB_HOST'] ?? 'localhost',
+    'port' => $_ENV['DB_PORT'] ?? '3306',
+    'name' => $_ENV['DB_NAME'] ?? '',
+    'user' => $_ENV['DB_USER'] ?? 'root',
+    'password' => $_ENV['DB_PASS'] ?? '',
     'options' => [
         \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
         \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,

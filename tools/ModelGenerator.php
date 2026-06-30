@@ -2,8 +2,18 @@
 
 class ModelGenerator
 {
-    private $modelDirectory = __DIR__ . '../../app/Models/';
+    private $modelDirectory;
     private $namespace = 'App\\Models';
+
+    public function __construct()
+    {
+        // tools/ -> project root -> app/Models/
+        $this->modelDirectory = dirname(__DIR__) . '/app/Models/';
+
+        if (!is_dir($this->modelDirectory)) {
+            mkdir($this->modelDirectory, 0755, true);
+        }
+    }
 
     public function generate(string $tableName)
     {
