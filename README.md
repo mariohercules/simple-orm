@@ -1,472 +1,188 @@
-# Simple ORM Documentation
+# Simple ORM
 
-## Table of Contents
-1. [Installation](#installation)
-2. [Configuration](#configuration)
-3. [Directory Structure](#directory-structure)
-4. [Basic Usage](#basic-usage)
-5. [Model Creation](#model-creation)
-6. [Query Builder](#query-builder)
-7. [Database Operations](#database-operations)
-8. [Relationships](#relationships)
-9. [Examples](#examples)
+A lightweight, Eloquent-flavoured Active Record ORM for PHP 8.1+ on PDO/MySQL.
+Models, a fluent query builder for all four verbs, relationships with eager
+loading, attribute casting, dirty-tracked saves, and a schema-introspecting
+model generator — in a few hundred lines, with no framework.
+
+## Requirements
+
+- PHP 8.1+ with `pdo` (and `pdo_mysql` for MySQL)
+- Composer
 
 ## Installation
 
-### Requirements
-- PHP 7.4 or higher
-- MySQL 5.7 or higher
-- Composer
-
-### Step 1: Clone the Repository
-```bash
-git clone <your-repository>
-cd <project-directory>
-```
-
-### Step 2: Install Dependencies
 ```bash
 composer install
+cp .env.example .env   # then edit credentials
 ```
 
-### Step 3: Configure Environment
-Copy the example environment file and modify it with your settings:
-```bash
-cp .env.example .env
-```
-
-## Configuration
-
-### Environment Variables (.env)
 ```env
 DB_HOST=localhost
-DB_PORT=8889
+DB_PORT=3306
 DB_NAME=your_database
 DB_USER=root
-DB_PASS=root
+DB_PASS=secret
 ```
 
-### Database Configuration (config/database.php)
-The database configuration file automatically loads your environment variables and sets up the connection parameters.
+## Bootstrapping
 
-## Directory Structure
-```
-project/
-├── .env
-├── composer.json
-├── vendor/
-├── src/
-│   ├── Contracts/
-│   │   ├── ConnectionInterface.php
-│   │   ├── ModelInterface.php
-│   │   └── QueryBuilderInterface.php
-│   ├── Database/
-│   │   └── DatabaseConnection.php
-│   ├── Query/
-│   │   └── QueryBuilder.php
-│   ├── Traits/
-│   │   ├── AttributeHandler.php
-│   │   └── TableNameHandler.php
-│   └── Model.php
-├── app/
-│   └── Models/
-├── config/
-│   └── database.php
-└── public/
-    └── index.php
-```
+There is no implicit/global connection — wire one up once at startup. The
+`Manager` registers connections and teaches the `Model` base how to resolve them.
 
-## Basic Usage
-
-### Creating a Model
 ```php
-<?php
+use SimpleORM\Manager;
 
-namespace App\Models;
+$manager = (new Manager())
+    ->addConnection(require __DIR__ . '/config/database.php')
+    ->setAsGlobal()   // enables Manager::table() for raw queries
+    ->bootModels();   // models can now resolve their connection
+```
 
-use SimpleORM\Model;
+`config/database.php` reads the `.env` values and returns a plain config array,
+so `addConnection(require '...')` is all you need. Multiple databases:
+
+```php
+$manager->addConnection($analyticsConfig, 'analytics');
+// then on a model:  protected ?string $connection = 'analytics';
+```
+
+## Defining models
+
+```php
+use SimpleORM\Model\Model;
 
 class User extends Model
 {
-    protected string $table = 'ngb_users';
-    
-    protected array $fillable = [
-        'name',
-        'email',
-        'password'
-    ];
-    
-    protected array $guarded = ['id'];
+    // Table is inferred (User -> users); override when needed.
+    protected array $fillable = ['name', 'email', 'active'];
+    protected array $casts    = ['active' => 'boolean'];
+    protected array $hidden   = ['password'];   // excluded from toArray()/JSON
+
+    public function posts()
+    {
+        return $this->hasMany(Post::class);
+    }
 }
 ```
 
-### Basic Operations
+Casts: `int`, `float`, `string`, `bool`, `array`/`json`, `object`.
+
+## CRUD
+
 ```php
-// Create
-$user = new User();
-$user->name = 'John Doe';
-$user->email = 'john@example.com';
-$user->save();
+$user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
 
-// Read
-$user = User::find(1);
+$user = User::find(1);            // ?User
+$user = User::findOrFail(1);      // throws ModelNotFoundException
+$all  = User::all();             // User[]
 
-// Update
-$user->name = 'Jane Doe';
-$user->save();
+$user->name = 'Alice Smith';
+$user->save();                    // writes only the changed columns
+$user->update(['active' => false]);
 
-// Delete
 $user->delete();
 ```
 
-## Query Builder
+`save()` is dirty-aware: an update only writes columns that actually changed,
+and `created_at` / `updated_at` are maintained automatically (set
+`public bool $timestamps = false;` to opt out).
 
-### Available Methods
-- `select(array $columns = ['*'])`
-- `where(string $column, string $operator, $value)`
-- `orderBy(string $column, string $direction = 'ASC')`
-- `limit(int $limit)`
-- `join(string $table, string $first, string $operator, string $second)`
-- `leftJoin(string $table, string $first, string $operator, string $second)`
+## Query builder
 
-### Example Queries
+`Model::query()` returns a builder that hydrates rows into models. The full
+fluent surface is available, and writes go through the same builder.
+
 ```php
-// Complex query
 $users = User::query()
     ->select(['users.*', 'roles.name as role_name'])
     ->join('roles', 'users.role_id', '=', 'roles.id')
-    ->where('users.active', '=', 1)
-    ->orderBy('users.created_at', 'DESC')
+    ->where('users.active', 1)            // 2-arg shorthand for '='
+    ->whereIn('users.role_id', [1, 2, 3])
+    ->orderBy('users.created_at', 'desc')
     ->limit(10)
     ->get();
 
-// Simple where clause
-$activeUsers = User::query()
-    ->where('active', '=', 1)
-    ->get();
+User::where('active', 1)->count();
+User::where('active', 1)->exists();
+User::query()->forPage(2, 15)->get();      // pagination
+User::query()->where('active', 0)->update(['active' => 1]);  // bulk update
+User::where('spam', 1)->delete();          // bulk delete
 ```
 
-## Database Operations
+Operators are whitelisted and order directions validated, so untrusted input
+can't smuggle SQL through a column/operator slot. For raw, model-less queries:
 
-### Connection Management
 ```php
-// Get database instance
-$config = require 'config/database.php';
-$db = DatabaseConnection::getInstance($config);
-
-// Connect
-$connection = $db->connect();
-
-// Disconnect
-$db->disconnect();
+$rows = SimpleORM\Manager::table('users')->where('active', 1)->get();  // arrays
 ```
 
-### Transaction Support
-```php
-$db = DatabaseConnection::getInstance($config);
-$connection = $db->connect();
+## Relationships
 
-try {
-    $connection->beginTransaction();
-    
-    // Your operations here
-    
-    $connection->commit();
-} catch (Exception $e) {
-    $connection->rollBack();
-    throw $e;
-}
-```
-
-## Working with Models
-
-### Defining Relationships
 ```php
 class User extends Model
 {
-    // One-to-Many relationship example
-    public function posts()
-    {
-        return self::query()
-            ->select(['posts.*'])
-            ->join('posts', 'users.id', '=', 'posts.user_id')
-            ->where('users.id', '=', $this->id)
-            ->get();
-    }
+    public function posts()   { return $this->hasMany(Post::class); }
+    public function profile() { return $this->hasOne(Profile::class); }
 }
-```
 
-### Mass Assignment Protection
-```php
-class User extends Model
+class Post extends Model
 {
-    // Fields that can be mass assigned
-    protected array $fillable = [
-        'name',
-        'email'
-    ];
-    
-    // Fields that cannot be mass assigned
-    protected array $guarded = [
-        'id',
-        'password'
-    ];
+    public function user() { return $this->belongsTo(User::class); }
 }
 ```
 
-## Model Generator
+Lazy access runs a query on first touch and caches the result:
 
-The ORM includes a Model Generator tool to automatically create model classes for your database tables.
+```php
+$user = User::find(1);
+$user->posts;        // Post[]  (single query, cached)
+$post->user;         // User
+```
 
-### Using the Model Generator
+Eager loading avoids N+1 by resolving a relation for the whole result set in one
+extra query:
 
-1. Create the tools directory in your project root:
+```php
+$users = User::with('posts')->get();   // 2 queries total, not 1 + N
+foreach ($users as $user) {
+    foreach ($user->posts as $post) { /* ... */ }
+}
+```
+
+## Transactions
+
+```php
+User::transaction(function () {
+    $user = User::create([...]);
+    $user->profile()->getQuery()->create([...]);
+});   // commits on return, rolls back on any exception
+```
+
+## Model generator
+
+Generate model classes by introspecting the live database — `$fillable`,
+`$primaryKey`, `$casts`, and `$timestamps` come from the real schema:
+
 ```bash
-mkdir -p tools
+# All tables, stripping an "ngb_" prefix from class names:
+bin/simple-orm generate --prefix=ngb_ --namespace="App\Models" --out=app/Models
+
+# Specific tables:
+bin/simple-orm generate users posts
 ```
 
-2. Create the ModelGenerator file (tools/ModelGenerator.php):
-```php
-<?php
+## Testing
 
-class ModelGenerator
-{
-    private string $modelDirectory;
-    private string $namespace = 'App\\Models';
-
-    public function __construct()
-    {
-        // Get the project root directory
-        $rootDir = dirname(__DIR__);
-        $this->modelDirectory = $rootDir . '/app/Models/';
-
-        // Create Models directory if it doesn't exist
-        if (!is_dir($this->modelDirectory)) {
-            mkdir($this->modelDirectory, 0755, true);
-        }
-    }
-
-    public function generate(string $tableName)
-    {
-        // Remove 'ngb_' prefix and convert to CamelCase
-        $className = $this->getClassName($tableName);
-        
-        $template = <<<PHP
-<?php
-
-namespace {$this->namespace};
-
-use SimpleORM\Model;
-
-class {$className} extends Model
-{
-    protected string \$table = '{$tableName}';
-    
-    protected array \$fillable = [
-        // Add your fillable fields here
-    ];
-    
-    protected array \$guarded = ['id'];
-}
-PHP;
-
-        $filename = $this->modelDirectory . $className . '.php';
-        file_put_contents($filename, $template);
-        
-        echo "Generated model {$className} for table {$tableName}\n";
-    }
-
-    private function getClassName(string $tableName): string
-    {
-        // Remove prefix (e.g., 'ngb_')
-        $name = str_replace('ngb_', '', $tableName);
-        
-        // Convert to singular if possible
-        if (substr($name, -1) === 's') {
-            $name = substr($name, 0, -1);
-        }
-        
-        // Convert snake_case to CamelCase
-        return str_replace('_', '', ucwords($name, '_'));
-    }
-}
-```
-
-3. Create a generator script (tools/generate_models.php):
-```php
-<?php
-
-require_once __DIR__ . '/ModelGenerator.php';
-
-// List your tables
-$tables = [
-    'users',
-    'posts',
-    'comments',
-    // Add all your tables here
-];
-
-// Create generator instance
-$generator = new ModelGenerator();
-
-// Generate models for each table
-foreach ($tables as $table) {
-    $generator->generate($table);
-}
-
-echo "\nAll models have been generated successfully!\n";
-```
-
-### Running the Generator
-
-1. From your project root:
 ```bash
-php tools/generate_models.php
+composer test       # PHPUnit
+composer analyse    # PHPStan (level 5)
 ```
 
-### Generated Model Structure
-
-The generator will:
-- Create model classes in app/Models/
-- Remove the 'ngb_' prefix from table names
-- Convert snake_case to CamelCase
-- Set up proper namespacing
-- Include basic model configuration
-
-Example output for table 'ngb_users':
-```php
-<?php
-
-namespace App\Models;
-
-use SimpleORM\Model;
-
-class User extends Model
-{
-    protected string $table = 'ngb_users';
-    
-    protected array $fillable = [
-        // Add your fillable fields here
-    ];
-    
-    protected array $guarded = ['id'];
-}
-```
-
-### Customizing the Generator
-
-You can modify the ModelGenerator class to:
-- Change the namespace
-- Add custom methods
-- Modify the model template
-- Add relationship methods
-- Include additional properties
-
-Example of customizing the template:
-```php
-private function getTemplate($className, $tableName): string
-{
-    return <<<PHP
-<?php
-
-namespace {$this->namespace};
-
-use SimpleORM\Model;
-
-class {$className} extends Model
-{
-    protected string \$table = '{$tableName}';
-    
-    protected array \$fillable = [
-        // Add your fillable fields here
-    ];
-    
-    protected array \$guarded = ['id'];
-    
-    // Add custom methods
-    public function getByStatus(string \$status): array
-    {
-        return self::query()
-            ->where('status', '=', \$status)
-            ->get();
-    }
-}
-PHP;
-}
-```
-
-## Examples
-
-### Complete CRUD Example
-```php
-// Create
-$user = new User();
-$user->name = 'John Doe';
-$user->email = 'john@example.com';
-$user->save();
-
-// Read
-$user = User::find(1);
-$allUsers = User::all();
-
-// Update
-$user = User::find(1);
-$user->name = 'Jane Doe';
-$user->save();
-
-// Delete
-$user = User::find(1);
-$user->delete();
-```
-
-### Working with Relationships
-```php
-// Get user's posts
-$user = User::find(1);
-$posts = $user->posts();
-
-// Query with joins
-$userPosts = User::query()
-    ->select(['users.*', 'posts.title'])
-    ->leftJoin('posts', 'users.id', '=', 'posts.user_id')
-    ->where('users.active', '=', 1)
-    ->get();
-```
-
-## Error Handling
-The ORM includes built-in error handling and will throw exceptions for:
-- Database connection failures
-- Query execution errors
-- Invalid model operations
-
-Example error handling:
-```php
-try {
-    $user = User::find(1);
-    $user->save();
-} catch (Exception $e) {
-    // Handle the error
-    error_log($e->getMessage());
-}
-```
-
-## Best Practices
-
-1. Always use environment variables for configuration
-2. Implement proper error handling
-3. Use prepared statements (built into the Query Builder)
-4. Define relationships in model classes
-5. Use mass assignment protection
-6. Keep models in the appropriate namespace
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+Unit tests (`tests/Query`, `tests/Model`) need no database. The integration
+suite runs the full ORM against in-memory SQLite and skips automatically if
+`pdo_sqlite` is unavailable.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT.
