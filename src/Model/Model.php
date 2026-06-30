@@ -10,6 +10,8 @@ use RuntimeException;
 use SimpleORM\Connection\Connection;
 use SimpleORM\Connection\ConnectionManager;
 use SimpleORM\Model\Concerns\HasAttributes;
+use SimpleORM\Model\Concerns\HasEvents;
+use SimpleORM\Model\Concerns\HasGlobalScopes;
 use SimpleORM\Model\Concerns\HasRelationships;
 use SimpleORM\Model\Concerns\HasTimestamps;
 use SimpleORM\Query\QueryBuilder;
@@ -34,8 +36,13 @@ abstract class Model implements JsonSerializable
     use HasAttributes;
     use HasTimestamps;
     use HasRelationships;
+    use HasEvents;
+    use HasGlobalScopes;
 
     protected static ?ConnectionManager $resolver = null;
+
+    /** @var array<class-string,bool> */
+    protected static array $booted = [];
 
     protected ?string $connection = null;
     protected string $table = '';
@@ -62,8 +69,40 @@ abstract class Model implements JsonSerializable
      */
     public function __construct(array $attributes = [])
     {
+        $this->bootIfNotBooted();
         $this->syncOriginal();
         $this->fill($attributes);
+    }
+
+    /**
+     * Boot the model the first time it is instantiated for a given class: runs
+     * trait booters (boot{TraitName}, e.g. bootSoftDeletes) and the booted() hook.
+     */
+    protected function bootIfNotBooted(): void
+    {
+        if (!isset(static::$booted[static::class])) {
+            static::$booted[static::class] = true;
+            static::boot();
+            static::booted();
+        }
+    }
+
+    protected static function boot(): void
+    {
+        foreach (class_uses_recursive(static::class) as $trait) {
+            $method = 'boot' . class_basename($trait);
+
+            if (method_exists(static::class, $method)) {
+                forward_static_call([static::class, $method]);
+            }
+        }
+    }
+
+    /**
+     * User hook to register events / scopes once per class. Override in a model.
+     */
+    protected static function booted(): void
+    {
     }
 
     public static function setConnectionResolver(ConnectionManager $resolver): void
@@ -121,7 +160,9 @@ abstract class Model implements JsonSerializable
 
     public function newQuery(): Builder
     {
-        return (new Builder($this->newQueryBuilder()))->setModel($this);
+        return (new Builder($this->newQueryBuilder()))
+            ->setModel($this)
+            ->withGlobalScopes($this->getGlobalScopes());
     }
 
     public static function query(): Builder
@@ -150,6 +191,7 @@ abstract class Model implements JsonSerializable
         $model = $this->newInstance();
         $model->setRawAttributes($attributes, true);
         $model->exists = true;
+        $model->fireModelEvent('retrieved', false);
 
         return $model;
     }
@@ -223,29 +265,57 @@ abstract class Model implements JsonSerializable
 
     public function save(): bool
     {
+        if ($this->fireModelEvent('saving') === false) {
+            return false;
+        }
+
+        $saved = $this->exists ? $this->performUpdate() : $this->performInsert();
+
+        if ($saved) {
+            $this->fireModelEvent('saved', false);
+        }
+
+        return $saved;
+    }
+
+    protected function performUpdate(): bool
+    {
+        if (!$this->isDirty()) {
+            return true;
+        }
+
+        if ($this->fireModelEvent('updating') === false) {
+            return false;
+        }
+
         if ($this->usesTimestamps()) {
             $this->updateTimestamps();
         }
 
-        if ($this->exists) {
-            $dirty = $this->getDirty();
+        $dirty = $this->getDirty();
 
-            if ($dirty !== []) {
-                $this->newQueryBuilder()
-                    ->where($this->primaryKey, '=', $this->getKey())
-                    ->update($dirty);
-            }
-        } else {
-            $this->performInsert();
+        if ($dirty !== []) {
+            $this->newQueryBuilder()
+                ->where($this->primaryKey, '=', $this->getKey())
+                ->update($dirty);
         }
 
         $this->syncOriginal();
+        $this->fireModelEvent('updated', false);
 
         return true;
     }
 
-    protected function performInsert(): void
+    protected function performInsert(): bool
     {
+        if ($this->fireModelEvent('creating') === false) {
+            return false;
+        }
+
+        if ($this->usesTimestamps()) {
+            $this->updateTimestamps();
+        }
+
         $query = $this->newQueryBuilder();
 
         if ($this->incrementing) {
@@ -256,6 +326,10 @@ abstract class Model implements JsonSerializable
         }
 
         $this->exists = true;
+        $this->syncOriginal();
+        $this->fireModelEvent('created', false);
+
+        return true;
     }
 
     protected function castKeyValue(string $id): int|string
@@ -283,13 +357,27 @@ abstract class Model implements JsonSerializable
             return false;
         }
 
+        if ($this->fireModelEvent('deleting') === false) {
+            return false;
+        }
+
+        $this->performDeleteOnModel();
+        $this->fireModelEvent('deleted', false);
+
+        return true;
+    }
+
+    /**
+     * The actual delete. Overridden by the SoftDeletes trait to stamp deleted_at
+     * instead of removing the row.
+     */
+    protected function performDeleteOnModel(): void
+    {
         $this->newQueryBuilder()
             ->where($this->primaryKey, '=', $this->getKey())
             ->delete();
 
         $this->exists = false;
-
-        return true;
     }
 
     public function refresh(): static

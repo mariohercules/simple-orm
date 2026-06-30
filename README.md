@@ -159,6 +159,76 @@ User::transaction(function () {
 });   // commits on return, rolls back on any exception
 ```
 
+## Lifecycle: events, scopes & soft deletes
+
+### Events / observers
+
+Hook into the lifecycle: `creating, created, updating, updated, saving, saved,
+deleting, deleted, restoring, restored, retrieved`. A "before" listener that
+returns `false` halts the operation.
+
+```php
+User::creating(function (User $user) {
+    $user->uuid = bin2hex(random_bytes(16));
+});
+
+// or group handlers in an observer:
+class UserObserver
+{
+    public function created(User $user): void { /* ... */ }
+    public function deleting(User $user): bool { return $user->isDeletable(); }
+}
+User::observe(UserObserver::class);
+```
+
+Register them once — typically in the model's `booted()` hook.
+
+### Query scopes
+
+Local scopes are reusable, chainable query fragments:
+
+```php
+class User extends Model
+{
+    public function scopeActive($q)        { return $q->where('active', 1); }
+    public function scopeOfRole($q, $role) { return $q->where('role', $role); }
+}
+
+User::active()->ofRole('admin')->get();
+```
+
+Global scopes constrain *every* query for a model (register in `booted()`):
+
+```php
+protected static function booted(): void
+{
+    static::addGlobalScope('published', fn ($b) => $b->getQuery()->where('published', 1));
+}
+
+User::query()->withoutGlobalScope('published')->get();   // opt out
+```
+
+### Soft deletes
+
+`use SoftDeletes` on a model whose table has a nullable `deleted_at` column.
+`delete()` then stamps `deleted_at` instead of removing the row, and every query
+hides trashed rows by default:
+
+```php
+class Post extends Model
+{
+    use SoftDeletes;
+}
+
+$post->delete();                       // UPDATE ... SET deleted_at = now()
+$post->trashed();                      // true
+Post::find($id);                       // null — hidden by default
+Post::query()->withTrashed()->get();
+Post::query()->onlyTrashed()->get();
+$post->restore();
+$post->forceDelete();                  // real DELETE
+```
+
 ## Large tables
 
 `all()` / `get()` materialise the whole result set and build one model per row —
