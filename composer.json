@@ -1,16 +1,38 @@
 {
     "name": "mariohercules/simple-orm",
-    "description": "A simple PHP ORM implementation",
+    "description": "A lightweight Active Record ORM for PHP (Eloquent-lite).",
     "type": "library",
+    "license": "MIT",
     "require": {
-        "php": ">=7.4",
-        "vlucas/phpdotenv": "^5.6",
-        "phpmailer/phpmailer": "^6.9"
+        "php": ">=8.1",
+        "ext-pdo": "*",
+        "vlucas/phpdotenv": "^5.6"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5",
+        "phpstan/phpstan": "^1.11"
     },
     "autoload": {
         "psr-4": {
-            "App\\": "app/",
             "SimpleORM\\": "src/"
+        },
+        "files": [
+            "src/Support/helpers.php"
+        ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "SimpleORM\\Tests\\": "tests/"
         }
+    },
+    "bin": [
+        "bin/simple-orm"
+    ],
+    "scripts": {
+        "test": "phpunit",
+        "analyse": "phpstan analyse"
+    },
+    "config": {
+        "sort-packages": true
     }
 }
