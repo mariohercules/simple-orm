@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace SimpleORM\Model;
 
+use Closure;
 use SimpleORM\Exceptions\ModelNotFoundException;
 use SimpleORM\Query\QueryBuilder;
 use SimpleORM\Relations\Relation;
@@ -45,6 +46,16 @@ class Builder
     /** @var array<int,string> */
     protected array $eagerLoad = [];
 
+    /** @var array<string,Scope|Closure> */
+    protected array $scopes = [];
+
+    /** @var array<int,string> */
+    protected array $removedScopes = [];
+
+    protected bool $scopesApplied = false;
+
+    private const SCOPED_TERMINALS = ['count', 'exists', 'doesntExist', 'value', 'pluck', 'min', 'max', 'sum', 'avg'];
+
     public function __construct(protected QueryBuilder $query)
     {
     }
@@ -73,6 +84,8 @@ class Builder
      */
     public function get(array|string $columns = ['*']): array
     {
+        $this->applyScopes();
+
         return $this->hydrateAndLoad($this->query->get($columns));
     }
 
@@ -163,12 +176,104 @@ class Builder
      */
     public function update(array $values): int
     {
+        $this->applyScopes();
+
         return $this->query->update($this->addUpdatedAtColumn($values));
     }
 
+    /**
+     * Bulk delete. For soft-deletable models this stamps deleted_at instead of
+     * removing rows; use forceDelete() to hard-delete in bulk.
+     */
     public function delete(): int
     {
+        $this->applyScopes();
+
+        if (method_exists($this->model, 'getDeletedAtColumn')) {
+            $time = $this->model->freshTimestampString();
+            $values = [$this->model->getDeletedAtColumn() => $time];
+
+            if ($this->model->usesTimestamps()) {
+                $values[$this->model::UPDATED_AT] = $time;
+            }
+
+            return $this->query->update($values);
+        }
+
         return $this->query->delete();
+    }
+
+    public function forceDelete(): int
+    {
+        $this->applyScopes();
+
+        return $this->query->delete();
+    }
+
+    /**
+     * @param array<string,Scope|Closure> $scopes
+     */
+    public function withGlobalScopes(array $scopes): static
+    {
+        $this->scopes = $scopes + $this->scopes;
+
+        return $this;
+    }
+
+    public function withoutGlobalScope(string $name): static
+    {
+        $this->removedScopes[] = $name;
+
+        return $this;
+    }
+
+    /**
+     * Include soft-deleted rows in the results.
+     */
+    public function withTrashed(): static
+    {
+        return $this->withoutGlobalScope(SoftDeletingScope::NAME);
+    }
+
+    /**
+     * Return only soft-deleted rows.
+     */
+    public function onlyTrashed(): static
+    {
+        $this->withoutGlobalScope(SoftDeletingScope::NAME);
+
+        $column = method_exists($this->model, 'getDeletedAtColumn')
+            ? $this->model->getDeletedAtColumn()
+            : 'deleted_at';
+        $this->query->whereNotNull($column);
+
+        return $this;
+    }
+
+    /**
+     * Apply all registered global scopes to the underlying query, once.
+     */
+    public function applyScopes(): static
+    {
+        if ($this->scopesApplied) {
+            return $this;
+        }
+
+        foreach ($this->scopes as $name => $scope) {
+            if (in_array($name, $this->removedScopes, true)) {
+                continue;
+            }
+
+            if ($scope instanceof Scope) {
+                $scope->apply($this, $this->model);
+            } else {
+                $scope($this);
+            }
+        }
+
+        $this->scopesApplied = true;
+
+        return $this;
     }
 
     /**
@@ -249,6 +354,8 @@ class Builder
         if ($size < 1) {
             throw new \InvalidArgumentException('Chunk size must be at least 1.');
         }
+
+        $this->applyScopes();
 
         $column ??= $this->model->getKeyName();
         $lastId = null;
@@ -344,6 +451,18 @@ class Builder
      */
     public function __call(string $method, array $parameters): mixed
     {
+        // Local scope: User::active() -> $model->scopeActive($builder, ...).
+        if (method_exists($this->model, 'scope' . ucfirst($method))) {
+            $this->model->{'scope' . ucfirst($method)}($this, ...$parameters);
+
+            return $this;
+        }
+
+        // Terminal reads must see global scopes before the query runs.
+        if (in_array($method, self::SCOPED_TERMINALS, true)) {
+            $this->applyScopes();
+        }
+
         $result = $this->query->{$method}(...$parameters);
 
         return $result instanceof QueryBuilder ? $this : $result;
