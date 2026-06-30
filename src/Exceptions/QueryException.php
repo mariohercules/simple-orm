@@ -1,11 +1,26 @@
 <?php
 
+declare(strict_types=1);
+
 namespace SimpleORM\Exceptions;
 
-class QueryException extends \Exception
+use RuntimeException;
+use Throwable;
+
+class QueryException extends RuntimeException
 {
-    public static function queryFailed(string $query, string $message): self
-    {
-        return new self("Query execution failed for '{$query}': {$message}");
+    /**
+     * @param array<int,mixed> $bindings
+     */
+    public function __construct(
+        public readonly string $sql,
+        public readonly array $bindings,
+        Throwable $previous
+    ) {
+        parent::__construct(
+            sprintf('%s (SQL: %s)', $previous->getMessage(), $sql),
+            0,
+            $previous
+        );
     }
 }

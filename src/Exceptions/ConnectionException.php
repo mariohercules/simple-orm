@@ -1,11 +1,11 @@
 <?php
 
+declare(strict_types=1);
+
 namespace SimpleORM\Exceptions;
 
-class ConnectionException extends \Exception
+use RuntimeException;
+
+class ConnectionException extends RuntimeException
 {
-    public static function connectionFailed(string $message): self
-    {
-        return new self("Database connection failed: {$message}");
-    }
 }
