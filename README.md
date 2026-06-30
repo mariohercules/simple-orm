@@ -159,6 +159,34 @@ User::transaction(function () {
 });   // commits on return, rolls back on any exception
 ```
 
+## Large tables
+
+`all()` / `get()` materialise the whole result set and build one model per row —
+fine for small results, ruinous for big ones. For large tables use the helpers
+below (measured on 200k rows, MySQL 5.7):
+
+```php
+// Stream in keyset-ordered chunks — constant memory (~6 MB vs ~170 MB for all()):
+User::query()->chunkById(1000, function (array $users) {
+    foreach ($users as $user) { /* ... */ }
+});
+
+// Or iterate lazily as a generator (same engine, constant memory):
+foreach (User::where('active', 1)->lazyById() as $user) {
+    /* ... */
+}
+
+// Keyset pagination instead of OFFSET — ~13x faster on deep pages:
+$page = User::query()->whereKeyAfter($lastSeenId)->limit(50)->get();
+
+// exists() stops at the first row (LIMIT 1) instead of count(*) — ~11x faster:
+if (User::where('email', $email)->exists()) { /* ... */ }
+```
+
+`chunkById`/`lazyById` page by the primary key (`where id > ? order by id limit n`),
+so they hold one chunk in memory at a time and stay correct even while rows are
+being inserted — unlike `OFFSET`-based paging.
+
 ## Model generator
 
 Generate model classes by introspecting the live database — `$fillable`,

@@ -1,0 +1,107 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * SimpleORM command line entry point.
+ *
+ *   bin/simple-orm generate [options] [table ...]
+ *
+ * Options:
+ *   --config=PATH      Config file returning a connection array (default: config/database.php)
+ *   --namespace=NS     Namespace for generated models (default: App\Models)
+ *   --out=DIR          Output directory (default: app/Models)
+ *   --prefix=PREFIX    Table prefix to strip from class names (e.g. ngb_)
+ *
+ * With no table arguments, every table in the database is generated.
+ */
+
+use SimpleORM\Connection\Connection;
+use SimpleORM\Tools\ModelGenerator;
+
+$autoloads = [
+    __DIR__ . '/../vendor/autoload.php',   // running from a standalone clone
+    __DIR__ . '/../../../autoload.php',     // installed as a Composer dependency
+];
+
+$autoloaded = false;
+foreach ($autoloads as $file) {
+    if (is_file($file)) {
+        require $file;
+        $autoloaded = true;
+        break;
+    }
+}
+
+if (!$autoloaded) {
+    fwrite(STDERR, "Could not locate vendor/autoload.php. Run `composer install` first.\n");
+    exit(1);
+}
+
+/** @var list<string> $argv */
+$args = array_slice($argv, 1);
+$command = $args[0] ?? 'help';
+
+if ($command !== 'generate') {
+    fwrite(STDOUT, "Usage: simple-orm generate [--config=PATH] [--namespace=NS] [--out=DIR] [--prefix=PREFIX] [table ...]\n");
+    exit($command === 'help' ? 0 : 1);
+}
+
+$options = [
+    'config' => 'config/database.php',
+    'namespace' => 'App\\Models',
+    'out' => 'app/Models',
+    'prefix' => '',
+];
+$tables = [];
+
+foreach (array_slice($args, 1) as $arg) {
+    if (preg_match('/^--([a-z]+)=(.*)$/', $arg, $m)) {
+        $options[$m[1]] = $m[2];
+    } else {
+        $tables[] = $arg;
+    }
+}
+
+$cwd = getcwd() ?: '.';
+$configPath = $options['config'];
+if (!is_file($configPath)) {
+    $configPath = $cwd . DIRECTORY_SEPARATOR . $options['config'];
+}
+
+if (!is_file($configPath)) {
+    fwrite(STDERR, "Config file not found: {$options['config']}\n");
+    exit(1);
+}
+
+/** @var array<string,mixed> $config */
+$config = require $configPath;
+$database = $config['name'] ?? $config['database'] ?? null;
+
+if ($database === null) {
+    fwrite(STDERR, "Config must define a database name ('name' or 'database').\n");
+    exit(1);
+}
+
+$outDir = $options['out'];
+if (!preg_match('#^([a-zA-Z]:[\\\\/]|/)#', $outDir)) {
+    $outDir = $cwd . DIRECTORY_SEPARATOR . $outDir;
+}
+
+$generator = new ModelGenerator(
+    new Connection($config),
+    (string) $database,
+    $outDir,
+    $options['namespace'],
+    $options['prefix'],
+);
+
+$targets = $tables !== [] ? $tables : $generator->tables();
+
+foreach ($targets as $table) {
+    $path = $generator->generate($table);
+    fwrite(STDOUT, "Generated " . basename($path) . " for table {$table}\n");
+}
+
+fwrite(STDOUT, count($targets) . " model(s) written to {$outDir}\n");

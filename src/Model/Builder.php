@@ -73,7 +73,18 @@ class Builder
      */
     public function get(array|string $columns = ['*']): array
     {
-        $models = $this->hydrate($this->query->get($columns));
+        return $this->hydrateAndLoad($this->query->get($columns));
+    }
+
+    /**
+     * Hydrate rows into models and run any queued eager loads.
+     *
+     * @param array<int,array<string,mixed>> $rows
+     * @return array<int,Model>
+     */
+    protected function hydrateAndLoad(array $rows): array
+    {
+        $models = $this->hydrate($rows);
 
         if ($models !== [] && $this->eagerLoad !== []) {
             $models = $this->eagerLoadRelations($models);
@@ -186,6 +197,83 @@ class Builder
         $this->query->orderBy($column ?? $this->model::CREATED_AT, 'asc');
 
         return $this;
+    }
+
+    /**
+     * Keyset filter: rows whose primary key is greater than $id, ordered by key.
+     * Far cheaper than OFFSET for deep pagination on large tables — OFFSET makes
+     * the database walk and discard every skipped row, keyset seeks straight in.
+     */
+    public function whereKeyAfter(int|string $id): static
+    {
+        $key = $this->model->getKeyName();
+        $this->query->where($key, '>', $id)->orderBy($key);
+
+        return $this;
+    }
+
+    /**
+     * Process results in keyset-ordered chunks of $size, holding only one chunk
+     * in memory at a time. Stable under concurrent inserts (unlike OFFSET). Any
+     * existing order is replaced by the key column, which keyset paging requires.
+     *
+     * @param callable(array<int,Model>):mixed $callback
+     */
+    public function chunkById(int $size, callable $callback, ?string $column = null): void
+    {
+        foreach ($this->keysetChunks($size, $column) as $chunk) {
+            $callback($chunk);
+        }
+    }
+
+    /**
+     * Lazily yield every matching model, fetching one chunk at a time under the
+     * hood. Constant memory — the safe way to iterate a large table.
+     *
+     * @return \Generator<int,Model>
+     */
+    public function lazyById(int $size = 1000, ?string $column = null): \Generator
+    {
+        foreach ($this->keysetChunks($size, $column) as $chunk) {
+            foreach ($chunk as $model) {
+                yield $model;
+            }
+        }
+    }
+
+    /**
+     * @return \Generator<int,array<int,Model>>
+     */
+    protected function keysetChunks(int $size, ?string $column): \Generator
+    {
+        if ($size < 1) {
+            throw new \InvalidArgumentException('Chunk size must be at least 1.');
+        }
+
+        $column ??= $this->model->getKeyName();
+        $lastId = null;
+        $first = true;
+
+        do {
+            $query = clone $this->query;   // fresh copy of the base constraints
+            $query->orders = [];
+            $query->offset = null;
+
+            if (!$first) {
+                $query->where($column, '>', $lastId);
+            }
+            $query->orderBy($column)->limit($size);
+
+            $models = $this->hydrateAndLoad($query->get());
+            $count = count($models);
+
+            if ($count > 0) {
+                $lastId = end($models)->getAttribute($column);
+                yield $models;
+            }
+
+            $first = false;
+        } while ($count === $size);
     }
 
     /**
