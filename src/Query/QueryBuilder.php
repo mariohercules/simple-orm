@@ -291,7 +291,24 @@ class QueryBuilder
 
     public function exists(): bool
     {
-        return $this->count() > 0;
+        // SELECT ... LIMIT 1 stops at the first matching row, unlike count(*)
+        // which scans every match — orders of magnitude cheaper on large tables.
+        $limit = $this->limit;
+        $this->limit = 1;
+
+        $rows = $this->connection->select(
+            $this->grammar->compileSelect($this),
+            $this->getBindings()
+        );
+
+        $this->limit = $limit;
+
+        return $rows !== [];
+    }
+
+    public function doesntExist(): bool
+    {
+        return !$this->exists();
     }
 
     public function value(string $column): mixed

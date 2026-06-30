@@ -174,4 +174,81 @@ final class SqliteModelTest extends TestCase
         self::assertArrayNotHasKey('email', $array);
         self::assertSame('Alice', $array['name']);
     }
+
+    private function seedPosts(int $count, int $userId = 1): void
+    {
+        for ($i = 1; $i <= $count; $i++) {
+            IntegrationPost::create(['user_id' => $userId, 'title' => "P{$i}", 'meta' => []]);
+        }
+    }
+
+    public function testExistsAndDoesntExist(): void
+    {
+        $this->seedPosts(3);
+
+        self::assertTrue(IntegrationPost::where('user_id', 1)->exists());
+        self::assertFalse(IntegrationPost::where('user_id', 99)->exists());
+        self::assertTrue(IntegrationPost::query()->where('user_id', 99)->doesntExist());
+    }
+
+    public function testWhereKeyAfter(): void
+    {
+        $this->seedPosts(5);
+
+        $rows = IntegrationPost::query()->whereKeyAfter(3)->get();
+        self::assertSame([4, 5], array_map(static fn ($p) => $p->id, $rows));
+    }
+
+    public function testChunkById(): void
+    {
+        $this->seedPosts(25);
+
+        $seen = [];
+        $chunks = 0;
+        IntegrationPost::query()->chunkById(10, function (array $batch) use (&$seen, &$chunks): void {
+            $chunks++;
+            foreach ($batch as $post) {
+                $seen[] = $post->id;
+            }
+        });
+
+        self::assertSame(range(1, 25), $seen);
+        self::assertSame(3, $chunks, '10 + 10 + 5');
+    }
+
+    public function testLazyById(): void
+    {
+        $this->seedPosts(25);
+
+        $ids = [];
+        foreach (IntegrationPost::query()->lazyById(7) as $post) {
+            $ids[] = $post->id;
+        }
+
+        self::assertSame(range(1, 25), $ids);
+    }
+
+    public function testChunkByIdRespectsBaseConstraints(): void
+    {
+        for ($i = 1; $i <= 10; $i++) {
+            IntegrationPost::create(['user_id' => $i % 2 === 0 ? 2 : 1, 'title' => "P{$i}", 'meta' => []]);
+        }
+
+        $seen = [];
+        IntegrationPost::where('user_id', 1)->chunkById(3, function (array $batch) use (&$seen): void {
+            foreach ($batch as $post) {
+                $seen[] = $post->user_id;
+            }
+        });
+
+        self::assertCount(5, $seen);
+        self::assertSame([1], array_values(array_unique($seen)));
+    }
+
+    public function testChunkSizeMustBePositive(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        IntegrationPost::query()->chunkById(0, static fn () => null);
+    }
 }
